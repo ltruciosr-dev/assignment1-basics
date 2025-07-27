@@ -64,13 +64,15 @@ def _pretokenizer_dict(text: str, special_tokens: list[str] = None) -> dict[str,
 
     Args:
         text (str): The text to pre-tokenize.
+        special_tokens (list[str]): The special tokens to split on.
+        normalize (bool): Whether to normalize the text.
 
     Returns:
         list[list[int], int]: The list of subwords bytes and their counts.
     """
     pre_tokens: dict[str, int] = {}
 
-    # Find the matches
+    # Remove the special tokens
     if special_tokens:
         chunks = _split_on_tokens(text, special_tokens)
     else:
@@ -85,34 +87,6 @@ def _pretokenizer_dict(text: str, special_tokens: list[str] = None) -> dict[str,
                 pre_tokens[word] += 1
 
     return pre_tokens
-
-
-def _pretokenizer(text: str, special_tokens: list[str] = None) -> tuple[list[int], int]:
-    """
-    Given a text, return a list of subwords bytes and their counts.
-
-    Args:
-        text (str): The text to pre-tokenize.
-
-    Returns:
-        list[list[int], int]: The list of subwords bytes and their counts.
-    """
-    pre_tokens: dict[str, int] = {}
-
-    # Find the matches
-    if special_tokens:
-        chunks = _split_on_tokens(text, special_tokens)
-    else:
-        chunks = [text]
-
-    for chunk in chunks:
-        for match in re.finditer(PAT, chunk):
-            word: str = match.group(0)
-            if word not in pre_tokens:
-                pre_tokens[word] = 1
-            else:
-                pre_tokens[word] += 1
-    return [[_word_to_bytes(k), v] for k, v in pre_tokens.items()]
 
 
 def _single_bpe_merge(pre_tokens: dict[list[int], int], vocab: dict[bytes, int], merges: list[tuple[bytes, bytes]]):
@@ -225,7 +199,7 @@ def _find_chunk_boundaries(file: BinaryIO, desired_num_chunks: int, special_toke
 
 
 def _merge_tokens(
-    pre_tokens: dict[list[int], int], special_tokens: list[str], vocab_size: int
+    pre_tokens: tuple[list[int], int], special_tokens: list[str], vocab_size: int
 ) -> tuple[dict[bytes, int], list[tuple[bytes, bytes]]]:
     """
     Merge tokens until the vocabulary size is reached.
@@ -248,7 +222,7 @@ def _merge_tokens(
 
 
 def _merge_tokens_optimized(
-    pre_tokens: dict[list[int], int], special_tokens: list[str], vocab_size: int
+    pre_tokens: tuple[list[int], int], special_tokens: list[str], vocab_size: int
 ) -> tuple[dict[bytes, int], list[tuple[bytes, bytes]]]:
     """
     Merge tokens until the vocabulary size is reached.
@@ -287,43 +261,61 @@ def _merge_tokens_optimized(
         vocab[k_vocab] = b"".join([vocab[token] for token in frequent_pair])  # update vocab
         merges.append((vocab[frequent_pair[0]], vocab[frequent_pair[1]]))  # update merges
 
-        # Modify the pre_tokens accordingly
+        # Pre-filter tokens that contain the frequent pair for efficiency
+        tokens_to_update = []
         for i in range(len(pre_tokens)):
+            w_tokens = pre_tokens[i][0]
+            if len(w_tokens) >= 2:
+                # Check if this token contains the frequent pair
+                contains_pair = False
+                for j in range(len(w_tokens) - 1):
+                    if (w_tokens[j], w_tokens[j + 1]) == frequent_pair:
+                        contains_pair = True
+                        break
+                if contains_pair:
+                    tokens_to_update.append(i)
+
+        # Modify the pre_tokens accordingly (only process relevant tokens)
+        for i in tokens_to_update:
             w_tokens: list = pre_tokens[i][0]
             new_w_tokens: list = []
             count = pre_tokens[i][1]
-            if len(w_tokens) < 2:
-                continue
-            else:
-                # Update the word tokens if frequent pair exists
-                update = False
-                k = 0
-                while k < len(w_tokens) - 1:
-                    if (w_tokens[k], w_tokens[k + 1]) == frequent_pair:
-                        new_w_tokens.append(k_vocab)
-                        k += 2
-                        update = True
-                    else:
-                        new_w_tokens.append(w_tokens[k])
-                        k += 1
-                if k < len(w_tokens):
-                    new_w_tokens.append(w_tokens[-1])
-                # Update the pair_counter if word tokens was updated
-                if update:
-                    # Remove previous counts
-                    for a, b in zip(w_tokens, w_tokens[1:]):
-                        pair_counter[(a, b)] -= count
 
-                    # Add new counts
-                    for a, b in zip(new_w_tokens, new_w_tokens[1:]):
-                        if (a, b) in pair_counter.keys():
-                            pair_counter[(a, b)] += count
-                        else:
-                            pair_counter[(a, b)] = count
+            # Update the word tokens if frequent pair exists
+            update = False
+            k = 0
+            while k < len(w_tokens) - 1:
+                if (w_tokens[k], w_tokens[k + 1]) == frequent_pair:
+                    new_w_tokens.append(k_vocab)
+                    k += 2
+                    update = True
+                else:
+                    new_w_tokens.append(w_tokens[k])
+                    k += 1
+            if k < len(w_tokens):
+                new_w_tokens.append(w_tokens[-1])
+
+            # Update the pair_counter if word tokens was updated
+            if update:
+                # Remove previous counts
+                for a, b in zip(w_tokens, w_tokens[1:]):
+                    if (a, b) in pair_counter:
+                        pair_counter[(a, b)] -= count
+                        # Clean up pairs that reach zero or below
+                        if pair_counter[(a, b)] <= 0:
+                            del pair_counter[(a, b)]
+
+                # Add new counts
+                for a, b in zip(new_w_tokens, new_w_tokens[1:]):
+                    if (a, b) in pair_counter.keys():
+                        pair_counter[(a, b)] += count
+                    else:
+                        pair_counter[(a, b)] = count
             pre_tokens[i][0] = new_w_tokens
 
         # Update pair_counter and check if merge is possible
-        pair_counter.pop(frequent_pair)
+        if frequent_pair in pair_counter:
+            pair_counter.pop(frequent_pair)
         if not pair_counter:
             has_merge = False
 
@@ -402,7 +394,8 @@ def _compute_pre_tokens(
     n_chunks: int,
     n_workers: int,
     parallelizing: bool,
-):
+    cleaning: bool = False,
+) -> list[list[list[int], int]]:
     # 1. Compute the pre-tokens
     pre_tokens_counter = Counter()
 
@@ -429,7 +422,12 @@ def _compute_pre_tokens(
                 chunk = f.read(end - start).decode("utf-8", errors="ignore")
                 pre_tokens_counter.update(_pretokenizer_dict(chunk, special_tokens))
 
-    pre_tokens: tuple[list[int], int] = [[_word_to_bytes(k), v] for k, v in pre_tokens_counter.items()]
+    if cleaning:
+        avg_count = sum(pre_tokens_counter.values()) / len(pre_tokens_counter)
+        pre_tokens = [[_word_to_bytes(k), v] for k, v in pre_tokens_counter.items() if v > avg_count * 0.2]
+
+    else:
+        pre_tokens = [[_word_to_bytes(k), v] for k, v in pre_tokens_counter.items()]
 
     return pre_tokens
 
@@ -441,6 +439,7 @@ def train_bpe_tokenizer(
     n_chunks: int = 8,
     n_workers: int = 4,
     parallelizing: bool = True,
+    cleaning: bool = False,
 ) -> tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
     """Given the path to an input corpus, run train a BPE tokenizer and
     output its vocabulary and merges.
@@ -464,9 +463,7 @@ def train_bpe_tokenizer(
                 Merges are ordered by order of creation.
     """
     # 1. Compute the pre-tokens
-    pre_tokens = _compute_pre_tokens(
-        input_path, special_tokens, n_chunks=n_chunks, n_workers=n_workers, parallelizing=parallelizing
-    )
+    pre_tokens = _compute_pre_tokens(input_path, special_tokens, n_chunks, n_workers, parallelizing, cleaning)
 
     # 2. Compute the merges
     vocab, merges = _merge_tokens_optimized(pre_tokens, special_tokens, vocab_size)
