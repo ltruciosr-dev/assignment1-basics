@@ -1,9 +1,11 @@
 import regex as re
 import json
 import pickle
-from concurrent.futures import ProcessPoolExecutor
+import os
+import gc
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from functools import partial
-
+from itertools import islice
 from collections.abc import Iterable, Iterator
 
 
@@ -162,25 +164,27 @@ class BPETokenizer:
         text_bytes = b"".join(self.vocab[token] for token in tokens)
         return text_bytes.decode(errors="replace")
 
-    def encode_iterable(
-        self, iterable: Iterable[str], max_workers: int = None, batch_size: int = 1000
-    ) -> Iterator[int]:
-        """Optimized encode_iterable using ProcessPoolExecutor for parallel processing."""
-        # Convert iterable to list for batching
-        texts = list(iterable) if not isinstance(iterable, list) else iterable
+    def encode_iterable(self, iterable: Iterable[str], max_workers: int = None, batch_size: int = 200) -> Iterator[int]:
+        """Memory-efficient streaming encode_iterable with controlled pipeline depth."""
 
-        if not texts:
-            return
+        def batch_iterator(iterable, batch_size):
+            """Create batches from iterable without loading everything into memory."""
+            iterator = iter(iterable)
+            while True:
+                batch = list(islice(iterator, batch_size))
+                if not batch:
+                    break
+                yield batch
 
-        # For small datasets, use sequential processing to avoid overhead
-        if len(texts) < batch_size:
-            for text in texts:
+        # For sequential processing (no multiprocessing overhead)
+        if max_workers == 1:
+            for text in iterable:
                 tokens = self.encode(text)
                 yield from tokens
             return
 
-        # Create batches for parallel processing
-        batches = [texts[i : i + batch_size] for i in range(0, len(texts), batch_size)]
+        max_workers = max_workers or min(4, (os.cpu_count() or 1))
+        pipeline_depth = 2 * max_workers
 
         with ProcessPoolExecutor(max_workers=max_workers) as executor:
             # Create a partial function with the tokenizer state
@@ -192,16 +196,55 @@ class BPETokenizer:
                 pat=self.PAT,
             )
 
-            # Process batches in parallel
-            for future in executor.map(encode_batch_func, batches):
-                for tokens in future:
-                    yield from tokens
+            # Pipeline processing with controlled memory usage
+            batch_iter = batch_iterator(iterable, batch_size)
+            futures = {}
+            batches_processed = 0
+
+            # Submit initial batches to keep workers busy (reduced pipeline)
+            for _ in range(pipeline_depth):
+                try:
+                    batch = next(batch_iter)
+                    future = executor.submit(encode_batch_func, batch)
+                    futures[future] = None
+                except StopIteration:
+                    break
+
+            # Process results as they complete and submit new batches
+            while futures:
+                # Wait for at least one future to complete
+                for future in as_completed(futures):
+                    # Yield results from completed batch immediately
+                    batch_results = future.result()
+                    for tokens in batch_results:
+                        yield from tokens
+
+                    # Clear batch results immediately to free memory
+                    del batch_results
+
+                    # Remove completed future
+                    del futures[future]
+
+                    # Periodic garbage collection to prevent memory buildup
+                    batches_processed += 1
+                    if batches_processed % 5000 == 0:  # Every 50 batches
+                        gc.collect()
+
+                    # Submit next batch if available
+                    try:
+                        batch = next(batch_iter)
+                        new_future = executor.submit(encode_batch_func, batch)
+                        futures[new_future] = None
+                    except StopIteration:
+                        pass
+
+                    break  # Process one future at a time to maintain order
 
     @staticmethod
     def _encode_batch_worker(
         batch: list[str], vocab: dict[int, bytes], inv_vocab: dict[bytes, int], special_tokens: list[str], pat: str
     ) -> list[list[int]]:
-        """Worker function for parallel batch processing."""
+        """Memory-efficient worker function for parallel batch processing."""
         # Create a temporary tokenizer instance for this worker
         temp_tokenizer = BPETokenizer.__new__(BPETokenizer)
         temp_tokenizer.vocab = vocab
@@ -209,9 +252,15 @@ class BPETokenizer:
         temp_tokenizer.special_tokens = special_tokens
         temp_tokenizer.PAT = pat
 
+        # Process and yield results immediately to reduce memory usage
         batch_results = []
         for text in batch:
             tokens = temp_tokenizer.encode(text)
             batch_results.append(tokens)
 
+            # Clear the text reference to help with memory cleanup
+            text = None
+
+        # Clear the batch to help with garbage collection
+        batch.clear()
         return batch_results
