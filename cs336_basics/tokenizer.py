@@ -65,87 +65,6 @@ class BPETokenizer:
         text: str,
         encoding: str = "utf-8",
     ) -> list[list[int]]:
-        """Pre tokenize a text and represent each pre-token as a sequence of bytes."""
-        pre_tokens: list[list[int]] = []
-        if self.special_tokens:
-            chunks = self._split_on_tokens(text, tokens=self.special_tokens)
-            for chunk in chunks:
-                if chunk in self.special_tokens:
-                    special_bytes = chunk.encode("utf-8")
-                    special_token = self.inv_vocab.get(special_bytes)
-                    pre_tokens.append([special_token])
-                    continue
-                for match in re.finditer(self.PAT, chunk):
-                    word: str = match.group(0)
-                    word_bytes = word.encode(encoding)
-                    word_tokens = [self.inv_vocab.get(word_bytes[i : i + 1]) for i in range(len(word_bytes))]
-                    pre_tokens.append(word_tokens)
-        else:
-            for match in re.finditer(self.PAT, text):
-                word: str = match.group(0)
-                word_bytes = word.encode(encoding)
-                word_tokens = [self.inv_vocab.get(word_bytes[i : i + 1]) for i in range(len(word_bytes))]
-                pre_tokens.append(word_tokens)
-
-        return pre_tokens
-
-    def _apply_merges(self, pre_tokens: list[list[int]]) -> list[int]:
-        """Merge the bytes based on the pre-trained merges and vocab"""
-        after_merge_tokens: list[int] = []
-        vocab_size = len(self.vocab)
-        for w_tokens in pre_tokens:
-            new_tokens = w_tokens
-            w_valid = True
-            while w_valid:
-                prev_tokens = new_tokens
-                new_tokens = []
-                # Check if there are any token pairs
-                if len(prev_tokens) < 2:
-                    w_valid = False
-                    break
-
-                # Get all token pairs
-                pairs = []
-                for w_pair in zip(prev_tokens, prev_tokens[1:]):
-                    w_byte_pair = self.vocab[w_pair[0]] + self.vocab[w_pair[1]]
-                    k_pair = self.inv_vocab.get(w_byte_pair)
-                    if not k_pair:
-                        k_pair = vocab_size + 1
-                    pairs.append(k_pair)
-                if vocab_size < min(pairs):
-                    w_valid = False
-                    break
-
-                # Replace tokens by best pair
-                first_pair = min(pairs)
-                k = 0
-                while k < len(prev_tokens) - 1:
-                    w_pair = (prev_tokens[k], prev_tokens[k + 1])
-                    w_byte_pair = self.vocab[w_pair[0]] + self.vocab[w_pair[1]]
-                    k_pair = self.inv_vocab.get(w_byte_pair)
-                    if k_pair == first_pair:
-                        new_tokens.append(k_pair)
-                        k += 2
-                    else:
-                        new_tokens.append(prev_tokens[k])
-                        k += 1
-                if k < len(prev_tokens):
-                    new_tokens.append(prev_tokens[-1])
-            # Add the reduced tokens into the list
-            after_merge_tokens.extend(prev_tokens)
-        return after_merge_tokens
-
-    def encode_iterable(self, iterable: Iterable[str]) -> Iterator[int]:
-        for text in iterable:
-            pre_tokens = self._pre_tokenize(text)
-            tokens = self._apply_merges(pre_tokens)
-            yield from tokens
-
-    def opt_pre_tokenize(
-        self,
-        text: str,
-        encoding: str = "utf-8",
-    ) -> list[list[int]]:
         """Optimized pre tokenize with better memory management."""
         pre_tokens: list[list[int]] = []
 
@@ -153,7 +72,7 @@ class BPETokenizer:
             chunks = self._split_on_tokens(text, tokens=self.special_tokens)
             for chunk in chunks:
                 if chunk in self.special_tokens:
-                    special_bytes = chunk.encode("utf-8")
+                    special_bytes = chunk.encode(encoding)
                     special_token = self.inv_vocab.get(special_bytes)
                     if special_token is not None:
                         pre_tokens.append([special_token])
@@ -184,7 +103,7 @@ class BPETokenizer:
 
         return pre_tokens
 
-    def opt_apply_merges(self, pre_tokens: list[list[int]]) -> list[int]:
+    def _apply_merges(self, pre_tokens: list[list[int]]) -> list[int]:
         """Optimized merge application with reduced redundant computations."""
         after_merge_tokens: list[int] = []
         vocab_size = len(self.vocab)
@@ -230,8 +149,8 @@ class BPETokenizer:
 
     def encode(self, text: str) -> list[int]:
         """Optimized encode function."""
-        pre_tokens = self.opt_pre_tokenize(text)
-        tokens = self.opt_apply_merges(pre_tokens)
+        pre_tokens = self._pre_tokenize(text)
+        tokens = self._apply_merges(pre_tokens)
         return tokens
 
     def decode(self, tokens: list[int]) -> str:
@@ -240,10 +159,10 @@ class BPETokenizer:
             return ""
 
         # Use list comprehension and join for better performance
-        text_bytes = b"".join(self.vocab[token] for token in tokens if token in self.vocab)
+        text_bytes = b"".join(self.vocab[token] for token in tokens)
         return text_bytes.decode(errors="replace")
 
-    def opt_encode_iterable(
+    def encode_iterable(
         self, iterable: Iterable[str], max_workers: int = None, batch_size: int = 1000
     ) -> Iterator[int]:
         """Optimized encode_iterable using ProcessPoolExecutor for parallel processing."""
@@ -256,7 +175,7 @@ class BPETokenizer:
         # For small datasets, use sequential processing to avoid overhead
         if len(texts) < batch_size:
             for text in texts:
-                tokens = self.opt_encode(text)
+                tokens = self.encode(text)
                 yield from tokens
             return
 
@@ -292,7 +211,7 @@ class BPETokenizer:
 
         batch_results = []
         for text in batch:
-            tokens = temp_tokenizer.opt_encode(text)
+            tokens = temp_tokenizer.encode(text)
             batch_results.append(tokens)
 
         return batch_results
