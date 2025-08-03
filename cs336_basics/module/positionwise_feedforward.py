@@ -7,7 +7,7 @@ from einops import einsum
 class SwiGLU(nn.Module):
     def __init__(self, d_model: int, d_ff: int, device=None, dtype=None):
         """
-        Construct a linear transformation module.
+        Construct a SwiGLU transformation module.
 
         Args:
             in_features: int final dimension of the input

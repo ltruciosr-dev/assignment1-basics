@@ -17,7 +17,14 @@ from cs336_basics.module.embedding import Embedding
 from cs336_basics.module.norm import RMSNorm
 from cs336_basics.module.positionwise_feedforward import SwiGLU
 from cs336_basics.module.rope import RoPE
-from cs336_basics.module.utils import apply_softmax
+from cs336_basics.module.attention import (
+    MultiHeadAttention,
+    MultiHeadAttentionRoPE,
+)
+from cs336_basics.module.utils import (
+    apply_softmax,
+    scaled_dot_product_attention,
+)
 
 
 def run_linear(
@@ -111,7 +118,7 @@ def run_scaled_dot_product_attention(
     Returns:
         Float[Tensor, " ... queries d_v"]: Output of SDPA
     """
-    raise NotImplementedError
+    return scaled_dot_product_attention(Q, K, V, mask)
 
 
 def run_multihead_self_attention(
@@ -145,7 +152,16 @@ def run_multihead_self_attention(
         Float[Tensor, " ... sequence_length d_out"]: Tensor with the output of running your optimized, batched multi-headed attention
         implementation with the given QKV projection weights and input features.
     """
-    raise NotImplementedError
+    multihead_att = MultiHeadAttention(d_model, num_heads)
+    multihead_att.load_state_dict(
+        {
+            "q_proj_weight": q_proj_weight,
+            "k_proj_weight": k_proj_weight,
+            "v_proj_weight": v_proj_weight,
+            "o_proj_weight": o_proj_weight,
+        }
+    )
+    return multihead_att(in_features)
 
 
 def run_multihead_self_attention_with_rope(
@@ -185,7 +201,16 @@ def run_multihead_self_attention_with_rope(
         Float[Tensor, " ... sequence_length d_out"]: Tensor with the output of running your optimized, batched multi-headed attention
         implementation with the given QKV projection weights and input features.
     """
-    raise NotImplementedError
+    multihead_att = MultiHeadAttentionRoPE(d_model, num_heads, theta, max_seq_len)
+    multihead_att.load_state_dict(
+        {
+            "q_proj_weight": q_proj_weight,
+            "k_proj_weight": k_proj_weight,
+            "v_proj_weight": v_proj_weight,
+            "o_proj_weight": o_proj_weight,
+        }
+    )
+    return multihead_att(in_features, token_positions)
 
 
 def run_rope(

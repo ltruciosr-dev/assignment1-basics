@@ -24,7 +24,7 @@ class RoPE(nn.Module):
         self.register_buffer("cos_cached", torch.cos(angles), persistent=False)
         self.register_buffer("sin_cached", torch.sin(angles), persistent=False)
 
-    def forward(self, x: torch.Tensor, token_positions: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, token_positions: torch.Tensor | None = None) -> torch.Tensor:
         """
         Return the transformed tensor
 
@@ -35,8 +35,12 @@ class RoPE(nn.Module):
         Return:
             (Float[Tensor, "... sequence_length d_k"]): Output tensor for rotational positional embeddings.
         """
-        cos = self.cos_cached[token_positions]  # (sequence_length d_k//2)
-        sin = self.sin_cached[token_positions]  # (sequence_length d_k//2)
+        if token_positions is None:
+            cos = self.cos_cached
+            sin = self.sin_cached
+        else:
+            cos = self.cos_cached[token_positions]  # (sequence_length d_k//2)
+            sin = self.sin_cached[token_positions]  # (sequence_length d_k//2)
 
         # Compute the rotated positional embeddings
         x_even = x[..., 0::2]  # (... d_k//2)

@@ -3,13 +3,10 @@ import torch.nn as nn
 from einops import einsum
 
 
-nn.RMSNorm
-
-
 class RMSNorm(nn.Module):
     def __init__(self, d_model: int, eps: float = 1e-5, device=None, dtype=None):
         """
-        Construct the RMSNorm module.
+        Construct the RMSNorm layer normalization module.
 
         Args:
             d_model: int Hidden dimension of the model
