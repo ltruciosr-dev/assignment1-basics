@@ -17,7 +17,7 @@ class Linear(nn.Module):
         """
         self.factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
-        self.weight = self._init_weight(in_features, out_features)
+        self.weight = self._init_weight(in_features, out_features)  # [d_out, d_in]
 
     def _init_weight(self, in_features, out_features) -> nn.Parameter:
         """Initialize the weight."""

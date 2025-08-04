@@ -13,10 +13,10 @@ class MultiHeadAttention(nn.Module):
         Construct a causal multi-head self-attention as defined in https://arxiv.org/abs/1706.03762.
 
         Args:
-            in_features: int final dimension of the input
-            out_features: int final dimension of the output
-            device: torch.device | None = None Device to store the parameters on
-            dtype: torch.dtype | None = None Data type of the parameters
+            d_model (int): Final dimension of the input and output.
+            num_heads (int): Number of attention heads.
+            device (torch.device | None, optional): Device to store the parameters on.
+            dtype (torch.dtype | None, optional): Data type of the parameters.
         """
         self.factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
@@ -64,13 +64,16 @@ class MultiHeadAttention(nn.Module):
 class MultiHeadAttentionRoPE(nn.Module):
     def __init__(self, d_model: int, num_heads: int, theta: float, max_seq_len: int, device=None, dtype=None):
         """
-        Construct a causal multi-head self-attention as defined in https://arxiv.org/abs/1706.03762.
+        Construct a causal multi-head self-attention module with Rotary Positional Embeddings (RoPE)
+        as described in https://arxiv.org/abs/1706.03762.
 
         Args:
-            in_features: int final dimension of the input
-            out_features: int final dimension of the output
-            device: torch.device | None = None Device to store the parameters on
-            dtype: torch.dtype | None = None Data type of the parameters
+            d_model (int): Input and output feature dimension of the model.
+            num_heads (int): Number of attention heads.
+            theta (float): RoPE base parameter (typically 10000.0).
+            max_seq_len (int): Maximum sequence length for pre-caching RoPE.
+            device (torch.device or None, optional): Device to store the parameters on.
+            dtype (torch.dtype or None, optional): Data type of the parameters.
         """
         self.factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
