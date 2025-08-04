@@ -21,6 +21,10 @@ from cs336_basics.module.attention import (
     MultiHeadAttention,
     MultiHeadAttentionRoPE,
 )
+from cs336_basics.module.transformer import (
+    TransformerBlock,
+    TransformerLM,
+)
 from cs336_basics.module.utils import (
     apply_softmax,
     scaled_dot_product_attention,
@@ -306,7 +310,21 @@ def run_transformer_block(
         Float[Tensor, "batch sequence_length d_model"] Tensor with the output of
         running the Transformer block on the input features while using RoPE.
     """
-    raise NotImplementedError
+    transformer = TransformerBlock(d_model, num_heads, d_ff, max_seq_len, theta)
+    transformer.load_state_dict(
+        {
+            "attn.q_proj_weight": weights["attn.q_proj.weight"],
+            "attn.k_proj_weight": weights["attn.k_proj.weight"],
+            "attn.v_proj_weight": weights["attn.v_proj.weight"],
+            "attn.o_proj_weight": weights["attn.output_proj.weight"],
+            "ffn.w1_weight": weights["ffn.w1.weight"],
+            "ffn.w2_weight": weights["ffn.w2.weight"],
+            "ffn.w3_weight": weights["ffn.w3.weight"],
+            "ln1.gain": weights["ln1.weight"],
+            "ln2.gain": weights["ln2.weight"],
+        }
+    )
+    return transformer(in_features)
 
 
 def run_transformer_lm(
@@ -333,7 +351,7 @@ def run_transformer_lm(
         num_heads (int): Number of heads to use in multi-headed attention. `d_model` must be
             evenly divisible by `num_heads`.
         d_ff (int): Dimensionality of the feed-forward inner layer (section 3.3).
-        rope_theta (float): The RoPE $\Theta$ parameter.
+        rope_theta (float): The RoPE theta parameter.
         weights (dict[str, Tensor]):
             State dict of our reference implementation. {num_layers} refers to an
             integer between `0` and `num_layers - 1` (the layer index).
@@ -388,7 +406,36 @@ def run_transformer_lm(
         Float[Tensor, "batch_size sequence_length vocab_size"]: Tensor with the predicted unnormalized
         next-word distribution for each token.
     """
-    raise NotImplementedError
+    model = TransformerLM(
+        vocab_size=vocab_size,
+        context_length=context_length,
+        d_model=d_model,
+        num_layers=num_layers,
+        num_heads=num_heads,
+        d_ff=d_ff,
+        rope_theta=rope_theta,
+    )
+    model_state_dict = {
+        "embedding.weight": weights["token_embeddings.weight"],
+        "ln_final.gain": weights["ln_final.weight"],
+        "lm_head.weight": weights["lm_head.weight"],
+    }
+    for i in range(num_layers):
+        model_state_dict.update(
+            {
+                f"tf_blocks.{i}.attn.q_proj_weight": weights[f"layers.{i}.attn.q_proj.weight"],
+                f"tf_blocks.{i}.attn.k_proj_weight": weights[f"layers.{i}.attn.k_proj.weight"],
+                f"tf_blocks.{i}.attn.v_proj_weight": weights[f"layers.{i}.attn.v_proj.weight"],
+                f"tf_blocks.{i}.attn.o_proj_weight": weights[f"layers.{i}.attn.output_proj.weight"],
+                f"tf_blocks.{i}.ffn.w1_weight": weights[f"layers.{i}.ffn.w1.weight"],
+                f"tf_blocks.{i}.ffn.w2_weight": weights[f"layers.{i}.ffn.w2.weight"],
+                f"tf_blocks.{i}.ffn.w3_weight": weights[f"layers.{i}.ffn.w3.weight"],
+                f"tf_blocks.{i}.ln1.gain": weights[f"layers.{i}.ln1.weight"],
+                f"tf_blocks.{i}.ln2.gain": weights[f"layers.{i}.ln2.weight"],
+            }
+        )
+    model.load_state_dict(model_state_dict)
+    return model(in_indices)
 
 
 def run_rmsnorm(
@@ -427,7 +474,7 @@ def run_silu(in_features: Float[Tensor, " ..."]) -> Float[Tensor, " ..."]:
         Float[Tensor,"..."]: of with the same shape as `in_features` with the output of applying
         SiLU to each element.
     """
-    raise NotImplementedError
+    return in_features * torch.sigmoid(in_features)
 
 
 def run_get_batch(
